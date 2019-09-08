@@ -4,6 +4,7 @@ import { ReactiveBase, DatePicker } from '@appbaseio/reactivesearch';
 import { ReactiveOpenStreetMap } from '@appbaseio/reactivemaps';
 
 import './App.css';
+import {TileLayer} from "react-leaflet";
 
 class App extends Component {
     render() {
@@ -30,6 +31,7 @@ class App extends Component {
                     />
 
                     <ReactiveOpenStreetMap
+                        center={{lat:49, lon:9}}
                         componentId="map"
                         dataField="location"
                         react={{
@@ -39,7 +41,10 @@ class App extends Component {
                         renderData={result => ({
                             label: result.mag
                         })}
-                    />
+                        tileServer={"http://localhost:5000/raw/{z}/{x}/{y}{r}.png"}
+
+                    >
+                    </ReactiveOpenStreetMap>
                 </div>
             </ReactiveBase>
         );

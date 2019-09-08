@@ -35,3 +35,5 @@ python_src/data.csv
 python_src/data.json
 
 python_src/pipeline_1567873588594732000.js
+
+python_src/norm_ln34_mul_ps_vegetation_aug_dice_best\.pth

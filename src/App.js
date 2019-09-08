@@ -31,7 +31,8 @@ class App extends Component {
                     />
 
                     <ReactiveOpenStreetMap
-                        center={{lat:49, lon:9}}
+                        center={{lat:49.00688, lon:8.403653}}
+                        defaultZoom={18}
                         componentId="map"
                         dataField="location"
                         react={{
@@ -41,7 +42,7 @@ class App extends Component {
                         renderData={result => ({
                             label: result.mag
                         })}
-                        tileServer={"http://localhost:5000/raw/{z}/{x}/{y}{r}.png"}
+                        tileServer={"http://localhost:5000/raw/{z}/{x}/{y}.png"}
 
                     >
                     </ReactiveOpenStreetMap>

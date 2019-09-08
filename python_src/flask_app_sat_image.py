@@ -1,6 +1,11 @@
 import sys
 
-sys.path.insert( 0, './spacenet_three/src')
+import albumentations
+from albumentations.pytorch.functional import img_to_tensor
+
+from xd_xd import unet_vgg16
+
+sys.path.insert(0, './spacenet_three/src')
 
 from io import BytesIO
 
@@ -13,36 +18,40 @@ import torch
 import numpy as np
 import re
 
-from LinkNet import LinkNet34
-from presets import preset_dict
-import torchvision.transforms as transforms
-
 BING_API_KEY = 'Audnt4rCjB-fgd659_se2h2OriFlSWvuPOfzbfAspbt7QghsKj_XkJK1g_OJKQPm'
 BASEURL = "http://h0.ortho.tiles.virtualearth.net/tiles/a{0}.jpeg?g=131"
+OSM_TILES = 'https://a.tile.openstreetmap.de/{2}/{0}/{1}.png'
 
 
-checkpoint = torch.load('./norm_ln34_mul_ps_vegetation_aug_dice_best.pth')
+checkpoint = torch.load('xdxd_spacenet4_solaris_weights.pth', map_location={'cuda:0': 'cpu'})
+model = unet_vgg16(pretrained=False)
 
-model = LinkNet34(num_channels=3, num_classes=1)
-model = torch.nn.DataParallel(model).cuda()
+print(checkpoint)
 
-model.load_state_dict(checkpoint['state_dict'])
+if 'module.final.weight' in checkpoint:
+    model = torch.nn.DataParallel(model).cuda()
+    model.load_state_dict(checkpoint)
+    model = model.module
+else:
+    model.load_state_dict(checkpoint)
 
+loader = albumentations.Compose([albumentations.CenterCrop(256, 256, p=1.0), albumentations.Normalize()])
 
-imsize = 256
-loader = transforms.Compose([transforms.Scale(imsize), transforms.ToTensor()])
 
 def image_loader(image):
+    image = np.asarray(image)
     """load image, returns cuda tensor"""
-    image = loader(image).float()
+    image = loader(image=image)['image']
+    image = img_to_tensor(image)
     image = torch.autograd.Variable(image, requires_grad=True)
-    image = image.unsqueeze(0)  #this is for VGG, may not be needed for ResNet
-    return image.cuda()  #assumes that you're using GPU
+
+    return image.unsqueeze(0)
 
 
 app = Flask(__name__)
 
-print( "APP READY")
+print("APP READY")
+
 
 def tileXY_to_quadkey(tileX, tileY, level):
     """Converts tile XY coordinates into a QuadKey at a specified level of detail
@@ -64,25 +73,24 @@ def tileXY_to_quadkey(tileX, tileY, level):
     return ''.join([str(int(num, 2)) for num in re.findall('..?', quadkeybinary)])
     # return ''.join(i for j in zip(tileYbits, tileXbits) for i in j)
 
+
 def serve_pil_image(pil_img):
     img_io = BytesIO()
-    pil_img.save(img_io, 'JPEG', quality=70)
+    pil_img.save(img_io, 'PNG')
     img_io.seek(0)
-    return send_file(img_io, mimetype='image/jpeg')
+    return send_file(img_io, mimetype='image/png')
 
 
 def do_inference(raw_img):
-    print(model)
+    raw_img.save('raw.jpeg')
 
-    t = model(image_loader(raw_img))
+    outputs = model(image_loader(raw_img))
+    y_pred_sigmoid = np.clip(torch.sigmoid(
+        torch.squeeze(outputs)
+    ).detach().cpu().numpy(), 0.0, 1.0)
 
-    print(t)
-
-
-
-    return Image.fromarray(t.cpu().detach().numpy().reshape(256, 256) > 0.5, mode='1')
-
-
+    bit_mask = (y_pred_sigmoid > 0.005)
+    return bit_mask
 
 
 # We can use url_for('foo_view') for reverse-lookups in templates or view functions
@@ -90,23 +98,29 @@ def do_inference(raw_img):
 def raw(z, x, y):
     qk = tileXY_to_quadkey(int(x), int(y), int(z))
     url = BASEURL.format(qk)
-    print(url)
+    osm_url = OSM_TILES.format(x, y, z)
+
+    print(osm_url, url)
 
 
     with request.urlopen(url) as file:
-        raw_img = Image.open(file)
-        raw_img.save('raw.jpeg')
+        with request.urlopen(osm_url) as file2:
+            raw_img = Image.open(file)
+            raw_img_np = np.uint8(np.asarray(raw_img)).copy()
+            osm_map_np = np.uint8(np.asarray(Image.open(file2).convert('RGB'))).copy()
 
-        pred_img = do_inference(raw_img)
+            bit_mask = do_inference(raw_img)
+
+            raw_img_np[~bit_mask] = 0
+            osm_map_np[bit_mask] = 0
+
+            img = Image.fromarray(raw_img_np + osm_map_np, 'RGB')
 
 
 
-        return serve_pil_image(pred_img)
-
-
+            return serve_pil_image(img)
 
 
 if __name__ == '__main__':
-    do_inference(Image.open('raw.jpeg'))
     app.run()
 

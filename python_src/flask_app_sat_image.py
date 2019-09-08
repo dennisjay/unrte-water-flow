@@ -1,3 +1,7 @@
+import sys
+
+sys.path.insert( 0, './spacenet_three/src')
+
 from io import BytesIO
 
 from flask import Flask, send_file
@@ -5,32 +9,36 @@ from urllib import request
 from PIL import Image
 from itertools import chain
 
-import tensorflow as tf
-import tensorflow_hub as hub
-
+import torch
 import numpy as np
 import re
 
+from LinkNet import LinkNet34
+from presets import preset_dict
+import torchvision.transforms as transforms
 
 BING_API_KEY = 'Audnt4rCjB-fgd659_se2h2OriFlSWvuPOfzbfAspbt7QghsKj_XkJK1g_OJKQPm'
 BASEURL = "http://h0.ortho.tiles.virtualearth.net/tiles/a{0}.jpeg?g=131"
 
-module_handle = "https://tfhub.dev/google/openimages_v4/ssd/mobilenet_v2/1" #"https://tfhub.dev/google/faster_rcnn/openimages_v4/inception_resnet_v2/1"
 
-with tf.Graph().as_default():
-    detector = hub.Module(module_handle)
-    image_string_placeholder = tf.placeholder(tf.string)
-    decoded_image = tf.image.decode_jpeg(image_string_placeholder)
-    # Module accepts as input tensors of shape [1, height, width, 3], i.e. batch
-    # of size 1 and type tf.float32.
-    decoded_image_float = tf.image.convert_image_dtype(
-        image=decoded_image, dtype=tf.float32)
-    module_input = tf.expand_dims(decoded_image_float, 0)
-    result = detector(module_input, as_dict=True)
-    init_ops = [tf.global_variables_initializer(), tf.tables_initializer()]
+checkpoint = torch.load('./norm_ln34_mul_ps_vegetation_aug_dice_best.pth')
 
-    session = tf.Session()
-    session.run(init_ops)
+model = LinkNet34(num_channels=3, num_classes=1)
+model = torch.nn.DataParallel(model).cuda()
+
+model.load_state_dict(checkpoint['state_dict'])
+
+
+imsize = 256
+loader = transforms.Compose([transforms.Scale(imsize), transforms.ToTensor()])
+
+def image_loader(image):
+    """load image, returns cuda tensor"""
+    image = loader(image).float()
+    image = torch.autograd.Variable(image, requires_grad=True)
+    image = image.unsqueeze(0)  #this is for VGG, may not be needed for ResNet
+    return image.cuda()  #assumes that you're using GPU
+
 
 app = Flask(__name__)
 
@@ -64,22 +72,15 @@ def serve_pil_image(pil_img):
 
 
 def do_inference(raw_img):
-    output = BytesIO()
-    raw_img.save(output, format='JPEG')
-    image_string = output.getvalue()
+    print(model)
 
-    result_out, image_out = session.run(
-        [result, decoded_image],
-        feed_dict={image_string_placeholder: image_string})
-    print("Found %d objects." % len(result_out["detection_scores"]))
+    t = model(image_loader(raw_img))
 
-    image_with_boxes = draw_boxes(
-        np.array(image_out), result_out["detection_boxes"],
-        result_out["detection_class_entities"], result_out["detection_scores"],
-        min_score=0.2
-    )
+    print(t)
 
-    return Image.fromarray(image_with_boxes, 'RGB')
+
+
+    return Image.fromarray(t.cpu().detach().numpy().reshape(256, 256) > 0.5, mode='1')
 
 
 
@@ -94,7 +95,11 @@ def raw(z, x, y):
 
     with request.urlopen(url) as file:
         raw_img = Image.open(file)
+        raw_img.save('raw.jpeg')
+
         pred_img = do_inference(raw_img)
+
+
 
         return serve_pil_image(pred_img)
 
@@ -102,4 +107,6 @@ def raw(z, x, y):
 
 
 if __name__ == '__main__':
+    do_inference(Image.open('raw.jpeg'))
     app.run()
+
